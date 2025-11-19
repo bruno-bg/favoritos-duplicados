@@ -1,23 +1,67 @@
+import { Favorite } from "./types";
+
 export const generateFile = (doc: Document): string => {
-    // Serializing the document back to string
-    // We need to ensure the doctype and header are present
+    // Helper function to escape special characters in HTML
+    const escapeHtml = (unsafe: string): string => {
+        return unsafe
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    };
 
-    const serializer = new XMLSerializer();
-    let content = serializer.serializeToString(doc);
+    // Recursive function to traverse DOM and build HTML string manually
+    const traverse = (node: Element, indentLevel: number): string => {
+        let html = "";
+        const indent = "    ".repeat(indentLevel);
 
-    // XMLSerializer might produce XHTML-like output, but bookmarks are usually HTML.
-    // Also, it might miss the NETSCAPE header if it was in the original source but not part of the DOM tree standardly.
-    // However, since we parsed it with DOMParser, the header might be in the doctype or just text nodes?
-    // DOMParser 'text/html' puts everything in <html><body>...
-    // The NETSCAPE header is usually before <TITLE> or <H1>.
+        const children = Array.from(node.children);
 
-    // A robust way is to just take the body content and wrap it in the standard header if missing.
-    // Or, if we modified the 'doc' in place (removed nodes), we can just serialize it.
+        for (const child of children) {
+            const tagName = child.tagName.toUpperCase();
 
-    // But DOMParser puts the header text into the body or head?
-    // Let's assume we want to output a standard format.
+            if (tagName === "DT") {
+                // DT can contain H3 (Folder) or A (Bookmark)
+                const h3 = child.querySelector("h3");
+                const a = child.querySelector("a");
+                const dl = child.querySelector("dl");
 
-    const bodyContent = doc.body.innerHTML;
+                if (h3) {
+                    // It's a folder
+                    const addDate = h3.getAttribute("add_date") || h3.getAttribute("ADD_DATE") || "";
+                    const lastModified = h3.getAttribute("last_modified") || h3.getAttribute("LAST_MODIFIED") || "";
+                    const personalToolbar = h3.getAttribute("personal_toolbar_folder") || h3.getAttribute("PERSONAL_TOOLBAR_FOLDER");
+
+                    let attrs = `ADD_DATE="${addDate}" LAST_MODIFIED="${lastModified}"`;
+                    if (personalToolbar) {
+                        attrs += ` PERSONAL_TOOLBAR_FOLDER="${personalToolbar}"`;
+                    }
+
+                    html += `${indent}<DT><H3 ${attrs}>${escapeHtml(h3.textContent || "")}</H3>\n`;
+
+                    if (dl) {
+                        html += `${indent}<DL><p>\n`;
+                        html += traverse(dl, indentLevel + 1);
+                        html += `${indent}</DL><p>\n`;
+                    }
+                } else if (a) {
+                    // It's a bookmark
+                    const href = a.getAttribute("href") || a.getAttribute("HREF") || "";
+                    const addDate = a.getAttribute("add_date") || a.getAttribute("ADD_DATE") || "";
+                    const icon = a.getAttribute("icon") || a.getAttribute("ICON");
+
+                    let attrs = `HREF="${href}" ADD_DATE="${addDate}"`;
+                    if (icon) {
+                        attrs += ` ICON="${icon}"`;
+                    }
+
+                    html += `${indent}<DT><A ${attrs}>${escapeHtml(a.textContent || "")}</A>\n`;
+                }
+            }
+        }
+        return html;
+    };
 
     // Standard Header
     const header = `<!DOCTYPE NETSCAPE-Bookmark-file-1>
@@ -29,23 +73,18 @@ export const generateFile = (doc: Document): string => {
 <H1>Bookmarks</H1>
 `;
 
-    // If the parsed doc already has the structure, we might be duplicating headers if we prepend.
-    // But usually DOMParser strips the DOCTYPE if it's not standard HTML5.
-    // So we probably need to prepend the Netscape header.
+    // Find the root DL in the document
+    const rootDl = doc.querySelector("dl");
+    let bodyContent = "";
 
-    // We should check if the bodyContent starts with <DL>.
-    // If so, we wrap it.
+    if (rootDl) {
+        bodyContent = traverse(rootDl, 1);
+    } else {
+        console.warn("No root DL found in document.");
+    }
 
     return `${header}
 <DL><p>
-    ${bodyContent}
+${bodyContent}
 </DL><p>`;
 };
-
-// Wait, if we used DOMParser, the <DL> is likely inside the body.
-// So bodyContent will contain the <DL>...
-// But the original file had the header.
-// If we just return bodyContent, we lose the header.
-// So prepending the header is correct.
-// But we should check if bodyContent already has the outer DL.
-// Usually yes.
